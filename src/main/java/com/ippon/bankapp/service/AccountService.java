@@ -5,7 +5,10 @@ import com.ippon.bankapp.repository.AccountRepository;
 import com.ippon.bankapp.service.dto.AccountDTO;
 import com.ippon.bankapp.service.exception.AccountLastNameExistsException;
 import com.ippon.bankapp.service.exception.AccountNotFoundException;
+import com.ippon.bankapp.service.exception.InsufficientFundsException;
 import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
 
 @Service
 public class AccountService {
@@ -29,7 +32,7 @@ public class AccountService {
 
         notificationFactory
                 .getPreferredService(save.getNotificationPreference())
-                .orElseGet(notificationFactory::getDefaultNotification)
+                .orElseGet(() -> notificationFactory.getDefaultNotification())
                 .sendMessage("bank",
                         account.getLastName(),
                         "Account Created",
@@ -39,11 +42,14 @@ public class AccountService {
     }
 
     public AccountDTO getAccount(String lastName) {
-        Account account = accountRepository
+        Account account = getAccountEntity(lastName);
+        return mapAccountToDTO(account);
+    }
+
+    private Account getAccountEntity(String lastName) {
+        return accountRepository
                 .findByLastName(lastName)
                 .orElseThrow(AccountNotFoundException::new);
-
-        return mapAccountToDTO(account);
     }
 
     private void validateLastNameUnique(String lastName) {
@@ -58,5 +64,39 @@ public class AccountService {
                 .lastName(account.getLastName())
                 .balance(account.getBalance())
                 .notificationPreference(account.getNotificationPreference());
+    }
+
+    public AccountDTO deposit(String lastName, BigDecimal amount) {
+        Account account = getAccountEntity(lastName);
+        account.setBalance(account.getBalance().add(amount));
+        return mapAccountToDTO(saveAccount(account));
+    }
+
+    public AccountDTO withdraw(String lastName, BigDecimal amount) {
+        Account account = getAccountEntity(lastName);
+        if (account.getBalance().compareTo(amount) < 0) {
+            notificationFactory
+                    .getPreferredService(account.getNotificationPreference())
+                    .orElseGet(() -> notificationFactory.getDefaultNotification())
+                    .sendMessage("Bank",
+                            account.getLastName(),
+                            "Insufficient funds",
+                            String.format("Unable to withdraw %s. Your current balance is %s", amount, account.getBalance()));
+            throw new InsufficientFundsException();
+        }
+
+        account.setBalance(account.getBalance().subtract(amount));
+        return mapAccountToDTO(saveAccount(account));    }
+
+    private Account saveAccount(Account account) {
+        return accountRepository.save(account);
+    }
+
+    public AccountDTO transfer(String lastName, String destinationAccount, BigDecimal amount) {
+        Account source = getAccountEntity(lastName);
+        Account destination = getAccountEntity(destinationAccount);
+
+        deposit(destination.getLastName(), amount);
+        return withdraw(source.getLastName(), amount);
     }
 }
